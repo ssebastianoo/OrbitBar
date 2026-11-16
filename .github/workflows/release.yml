@@ -1,0 +1,70 @@
+# Pushing a tag like v0.2.0 builds OrbitBar, signs it, and publishes "OrbitBar <version>.dmg" as a GitHub release.
+#
+# Signing: with the MACOS_CERT_P12 and MACOS_CERT_PASSWORD secrets set, the app is signed with that certificate (your
+# Apple Development one), so every release has the same identity and macOS keeps trusting its keychain item across
+# updates. Without them the app is signed ad-hoc. Either way it is not notarized, so Gatekeeper warns on first launch.
+#   Export: Keychain Access → My Certificates → "Apple Development: …" → Export → .p12 with a password, then
+#     base64 -i cert.p12 | pbcopy        → secret MACOS_CERT_P12
+#     the export password                → secret MACOS_CERT_PASSWORD
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: swift test
+
+      - name: Set version from tag
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${GITHUB_REF_NAME#v}" Resources/Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${GITHUB_RUN_NUMBER}" Resources/Info.plist
+
+      - name: Import signing certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "$CERT_P12" ]; then
+            echo "MACOS_CERT_P12 is not set: the app will be signed ad-hoc"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" -f pkcs12 -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+          IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | sed -n 's/.*"\(.*\)".*/\1/p' | head -1)"
+          if [ -z "$IDENTITY" ]; then
+            echo "::error::No signing identity in MACOS_CERT_P12 (did the export include the private key?)"
+            exit 1
+          fi
+          echo "Signing with: $IDENTITY"
+          echo "ORBITBAR_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+
+      - name: Build dmg
+        run: scripts/release.sh
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/OrbitBar*.dmg
+          generate_release_notes: true
+
+      - name: Remove signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true

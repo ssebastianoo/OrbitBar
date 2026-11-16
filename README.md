@@ -25,6 +25,11 @@ scripts/release.sh              # → build/OrbitBar <version>.dmg (drag to Appl
 
 Bump `CFBundleShortVersionString` (and `CFBundleVersion`) in `Resources/Info.plist` first.
 
+Or let GitHub Actions do it: `git tag v0.2.0 && git push origin v0.2.0` runs `.github/workflows/release.yml`, which tests,
+builds, and attaches the dmg to a GitHub release. The version comes from the tag. To sign with a stable identity, set the
+`MACOS_CERT_P12` (base64 of an exported `.p12`) and `MACOS_CERT_PASSWORD` repository secrets. Without them the app is
+signed ad-hoc. The workflow file explains how to export the certificate.
+
 The app is not notarized (that needs a paid Apple Developer account), so on first launch macOS shows a warning. Tell
 people to do one of these:
 
