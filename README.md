@@ -7,6 +7,9 @@ A macOS menu bar app for [Orbit](https://github.com/coollabsio/orbit) tasks.
 - Create, edit, complete, re-prioritize, assign, and trash tasks.
 - Fully keyboard-driven, with global shortcuts.
 
+<img width="519" height="670" alt="image" src="https://github.com/user-attachments/assets/678908a2-1c64-4671-acf3-e8fc1deab61d" />
+
+
 ## Build & install
 
 Requires macOS 14+ and Xcode / Swift 6.
