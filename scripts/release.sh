@@ -13,6 +13,8 @@
 # The version comes from CFBundleShortVersionString in Resources/Info.plist: bump it before a release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# .env (see .env.example) is read here too, so ORBITBAR_SIGN_IDENTITY from it applies to the identity chosen below.
+source scripts/load-env.sh
 
 PLIST="Resources/Info.plist"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"

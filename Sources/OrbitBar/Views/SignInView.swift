@@ -64,6 +64,13 @@ struct SignInView: View {
                 TextField("orbit.example.com", text: $model.serverInput)
                     .focused($focus, equals: .server)
                     .onSubmit { focus = .email }
+                if let url = OrbitClient.normalize(model.serverInput), OrbitClient.isInsecure(url) {
+                    Label("This address uses plain HTTP: your password and session are sent unencrypted. Use https:// unless the server is on your own network.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             labeled("Email") {
                 TextField("you@example.com", text: $email)

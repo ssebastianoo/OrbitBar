@@ -4,6 +4,7 @@ enum OrbitError: LocalizedError, Equatable {
     case unauthorized
     case problem(status: Int, code: String?, detail: String)
     case invalidServer
+    case externalImageBlocked
     case unexpected(String)
 
     var errorDescription: String? {
@@ -11,6 +12,7 @@ enum OrbitError: LocalizedError, Equatable {
         case .unauthorized: return "Your session has ended. Sign in again."
         case .problem(_, _, let detail): return detail
         case .invalidServer: return "That doesn't look like an Orbit server address."
+        case .externalImageBlocked: return "Images from other sites are not loaded automatically."
         case .unexpected(let message): return message
         }
     }
@@ -31,12 +33,65 @@ final class OrbitClient: @unchecked Sendable {
     static let contract = "orbit-api-v1"
 
     /// A file URL from the API, such as `avatar_url`, which Orbit sends as a path relative to the server.
+    /// Only `http` and `https` come back: `file:` and other schemes are dropped.
     nonisolated static func resolve(_ string: String?, server: URL?) -> URL? {
         guard let string, !string.isEmpty else { return nil }
-        if let absolute = URL(string: string), absolute.scheme != nil { return absolute }
-        guard let server else { return nil }
-        return URL(string: string, relativeTo: server)?.absoluteURL
+        if let absolute = URL(string: string), absolute.scheme != nil { return isWeb(absolute) ? absolute : nil }
+        guard let server, let resolved = URL(string: string, relativeTo: server)?.absoluteURL else { return nil }
+        return isWeb(resolved) ? resolved : nil
     }
+
+    nonisolated static func isWeb(_ url: URL) -> Bool {
+        ["http", "https"].contains(url.scheme?.lowercased() ?? "")
+    }
+
+    /// The links a description may open: web pages and mail. Anything else (`file:`, other apps' schemes) is refused.
+    nonisolated static func isOpenableLink(_ url: URL) -> Bool {
+        isWeb(url) || url.scheme?.lowercased() == "mailto"
+    }
+
+    /// Scheme, host and port (with the default port filled in) match.
+    nonisolated static func sameOrigin(_ a: URL, _ b: URL) -> Bool {
+        func port(_ url: URL) -> Int? { url.port ?? (url.scheme?.lowercased() == "https" ? 443 : url.scheme?.lowercased() == "http" ? 80 : nil) }
+        return a.scheme?.lowercased() == b.scheme?.lowercased() && a.host?.lowercased() == b.host?.lowercased() && port(a) == port(b)
+    }
+
+    /// Plain `http` to a host that is not this Mac or a local network name: passwords and tokens travel unencrypted.
+    nonisolated static func isInsecure(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "http", let host = url.host?.lowercased() else { return false }
+        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".localhost") || host == "::1" { return false }
+        let parts = host.split(separator: ".").compactMap { Int($0) }
+        if parts.count == 4 {
+            switch (parts[0], parts[1]) {
+            case (127, _), (10, _), (192, 168), (169, 254): return false
+            case (172, 16...31): return false
+            default: return true
+            }
+        }
+        return true
+    }
+
+    /// Optional image proxy (`worker/image-proxy`), set as `OrbitBarImageProxy` in Info.plist. Images from other
+    /// sites go through it, so their hosts never see this Mac's address and can't reach its local network.
+    nonisolated static let imageProxy: URL? = {
+        guard let string = Bundle.main.object(forInfoDictionaryKey: "OrbitBarImageProxy") as? String,
+              let url = URL(string: string.trimmingCharacters(in: .whitespaces)), url.scheme?.lowercased() == "https" else { return nil }
+        return url
+    }()
+
+    /// `proxy?url=<url>`, with every reserved character of `url` percent-encoded. `URLQueryItem` leaves `+`, `&`
+    /// and `=` alone in some positions, and the worker reads `+` as a space.
+    nonisolated static func proxied(_ url: URL, through proxy: URL) -> URL? {
+        guard var components = URLComponents(url: proxy, resolvingAgainstBaseURL: false),
+              let value = url.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlUnreserved) else { return nil }
+        components.percentEncodedQuery = "url=" + value
+        return components.url
+    }
+
+    nonisolated static let imageProxyKey: String? = {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "OrbitBarImageProxyKey") as? String, !key.isEmpty else { return nil }
+        return key
+    }()
 
     let server: URL
     let token: String?
@@ -49,8 +104,10 @@ final class OrbitClient: @unchecked Sendable {
         config.httpShouldSetCookies = false
         config.httpCookieAcceptPolicy = .never
         config.timeoutIntervalForRequest = 20
-        self.session = URLSession(configuration: config)
+        self.session = URLSession(configuration: config, delegate: RedirectGuard(), delegateQueue: nil)
     }
+
+    deinit { session.finishTasksAndInvalidate() }
 
     /// `orbit.example.com` → `https://orbit.example.com`; keeps an explicit `http://` for local servers.
     static func normalize(_ input: String) -> URL? {
@@ -100,7 +157,9 @@ final class OrbitClient: @unchecked Sendable {
         if (200..<300).contains(http.statusCode) { return (data, http.statusCode) }
 
         let problem = try? Self.decoder.decode(Problem.self, from: data)
-        if http.statusCode == 401, problem?.code == "authentication_required" || token != nil && problem?.code == nil {
+        // With a token, any 401 means the session is gone. Without one (sign-in), only this code does: wrong
+        // passwords also answer 401.
+        if http.statusCode == 401, token != nil || problem?.code == "authentication_required" {
             throw OrbitError.unauthorized
         }
         let detail = problem?.detail ?? problem?.title ?? HTTPURLResponse.localizedString(forStatusCode: http.statusCode).capitalized
@@ -206,11 +265,23 @@ final class OrbitClient: @unchecked Sendable {
         try await get("\(ws(workspaceID))/tasks/\(taskID)")
     }
 
-    /// Bytes of a file such as a description image. Only requests to this server carry the token.
-    func fileData(_ url: URL) async throws -> Data {
-        var request = URLRequest(url: url)
-        if let token, url.scheme == server.scheme, url.host == server.host, url.port == server.port {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    /// Bytes of a file such as a description image or an avatar. Files on this server are fetched with the token.
+    /// Files on other sites go through the image proxy when one is set, and are refused otherwise
+    /// (`externalImageBlocked`) unless `direct` is true, which the person chooses.
+    func fileData(_ url: URL, direct: Bool = false) async throws -> Data {
+        guard Self.isWeb(url) else { throw OrbitError.unexpected("Could not load \(url.lastPathComponent).") }
+        var request: URLRequest
+        if Self.sameOrigin(url, server) {
+            request = URLRequest(url: url)
+            if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        } else if !direct, let proxy = Self.imageProxy {
+            guard let proxied = Self.proxied(url, through: proxy) else { throw OrbitError.unexpected("Could not load \(url.lastPathComponent).") }
+            request = URLRequest(url: proxied)
+            if let key = Self.imageProxyKey { request.setValue(key, forHTTPHeaderField: "X-Proxy-Key") }
+        } else if direct {
+            request = URLRequest(url: url)
+        } else {
+            throw OrbitError.externalImageBlocked
         }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -223,4 +294,23 @@ final class OrbitClient: @unchecked Sendable {
     func trashTask(_ workspaceID: String, taskID: String, version: Int) async throws {
         _ = try await request("DELETE", "\(ws(workspaceID))/tasks/\(taskID)", query: ["expected_version": String(version)])
     }
+}
+
+/// URLSession keeps headers set by hand across redirects. This drops `Authorization` when a redirect leaves the
+/// original origin or goes from https to http, and refuses redirects to anything but http(s).
+private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let target = request.url, OrbitClient.isWeb(target) else { completionHandler(nil); return }
+        var next = request
+        if let origin = task.originalRequest?.url, !OrbitClient.sameOrigin(origin, target) {
+            next.setValue(nil, forHTTPHeaderField: "Authorization")
+        }
+        completionHandler(next)
+    }
+}
+
+extension CharacterSet {
+    /// RFC 3986 unreserved characters: the only ones safe unencoded inside a query value.
+    static let urlUnreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
 }

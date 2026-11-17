@@ -5,7 +5,9 @@ import Security
 enum Keychain {
     private static let service = "dev.orbitbar.session"
 
-    static func save(token: String, server: String) {
+    /// False when the keychain refused the item: the session then works until the app quits.
+    @discardableResult
+    static func save(token: String, server: String) -> Bool {
         delete(server: server)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -14,7 +16,7 @@ enum Keychain {
             kSecValueData as String: Data(token.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
     }
 
     static func token(server: String) -> String? {

@@ -87,12 +87,12 @@ struct Avatar: View {
 
     /// Orbit's avatar URLs are relative `/api/…` paths that need the session, so `AsyncImage` can't load them.
     private func load(_ url: URL?) async {
-        guard let url else { image = nil; return }
+        guard let url, let client = model.client else { image = nil; return }
         if let cached = ImageCache.images.object(forKey: url as NSURL) { image = cached; return }
         image = nil
         do {
-            let data: Data
-            if let client = model.client { data = try await client.fileData(url) } else { data = try await URLSession.shared.data(from: url).0 }
+            // An avatar on another site comes through the image proxy, or falls back to initials.
+            let data = try await client.fileData(url)
             guard let loaded = NSImage(data: data) else { return }
             ImageCache.images.setObject(loaded, forKey: url as NSURL)
             image = loaded

@@ -95,4 +95,39 @@ final class OrbitBarTests: XCTestCase {
         XCTAssertEqual(Priority.none.next, .low)
         XCTAssertEqual(Priority.urgent.next, .none)
     }
+
+    func testLinkAndImagePolicy() {
+        let server = URL(string: "https://orbit.example.com")!
+        XCTAssertTrue(OrbitClient.isOpenableLink(URL(string: "https://example.com/a")!))
+        XCTAssertTrue(OrbitClient.isOpenableLink(URL(string: "mailto:a@example.com")!))
+        XCTAssertFalse(OrbitClient.isOpenableLink(URL(string: "file:///Applications/Calculator.app")!))
+        XCTAssertFalse(OrbitClient.isOpenableLink(URL(string: "smb://host/share")!))
+        XCTAssertFalse(OrbitClient.isOpenableLink(URL(string: "x-apple.systempreferences:com.apple.preference")!))
+        XCTAssertNil(OrbitClient.resolve("file:///etc/hosts", server: server))
+        XCTAssertNil(OrbitClient.resolve("javascript:alert(1)", server: server))
+
+        XCTAssertTrue(OrbitClient.sameOrigin(server, URL(string: "https://ORBIT.example.com:443/api/x")!))
+        XCTAssertFalse(OrbitClient.sameOrigin(server, URL(string: "http://orbit.example.com/api/x")!))
+        XCTAssertFalse(OrbitClient.sameOrigin(server, URL(string: "https://orbit.example.com:8443/x")!))
+        XCTAssertFalse(OrbitClient.sameOrigin(server, URL(string: "https://evil.example.com/x")!))
+    }
+
+    func testInsecureServerWarning() {
+        XCTAssertTrue(OrbitClient.isInsecure(URL(string: "http://orbit.example.com")!))
+        XCTAssertTrue(OrbitClient.isInsecure(URL(string: "http://8.8.8.8")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "https://orbit.example.com")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://localhost:18080")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://192.168.1.20")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://nas.local")!))
+    }
+
+    func testProxiedURLEncodesReservedCharacters() {
+        let proxy = URL(string: "https://proxy.example.dev")!
+        let image = URL(string: "https://cdn.example.com/a+b.png?x=1&y=2#frag")!
+        let proxied = OrbitClient.proxied(image, through: proxy)!
+        XCTAssertEqual(proxied.absoluteString,
+                       "https://proxy.example.dev?url=https%3A%2F%2Fcdn.example.com%2Fa%2Bb.png%3Fx%3D1%26y%3D2%23frag")
+        let decoded = URLComponents(url: proxied, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "url" }?.value
+        XCTAssertEqual(decoded, image.absoluteString)
+    }
 }

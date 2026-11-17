@@ -1,0 +1,11 @@
+{
+  // Image proxy for OrbitBar: description images and avatars from other sites load through here, so those sites
+  // never see the user's IP address and links can't point the app at the user's local network.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "orbitbar-image-proxy",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true }
+  // Optional: `npx wrangler secret put PROXY_KEY` and set the same value as OrbitBarImageProxyKey in Info.plist.
+  // It only keeps casual strangers off the proxy: the key ships inside the app.
+}
