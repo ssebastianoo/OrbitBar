@@ -6,13 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Local settings (not committed): .env may set ORBITBAR_IMAGE_PROXY, ORBITBAR_IMAGE_PROXY_KEY, ORBITBAR_SIGN_IDENTITY.
-# Variables already in the environment win, so CI is unaffected.
-if [ -f .env ]; then
-  while IFS='=' read -r name value; do
-    case "$name" in ''|\#*) continue ;; esac
-    if [ -z "${!name:-}" ]; then export "$name=$value"; fi
-  done < .env
-fi
+source scripts/load-env.sh
 
 swift build -c release --arch arm64 --arch x86_64 2>/dev/null || swift build -c release
 BIN="$(swift build -c release --show-bin-path 2>/dev/null)/OrbitBar"

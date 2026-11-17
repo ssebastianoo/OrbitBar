@@ -120,4 +120,14 @@ final class OrbitBarTests: XCTestCase {
         XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://192.168.1.20")!))
         XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://nas.local")!))
     }
+
+    func testProxiedURLEncodesReservedCharacters() {
+        let proxy = URL(string: "https://proxy.example.dev")!
+        let image = URL(string: "https://cdn.example.com/a+b.png?x=1&y=2#frag")!
+        let proxied = OrbitClient.proxied(image, through: proxy)!
+        XCTAssertEqual(proxied.absoluteString,
+                       "https://proxy.example.dev?url=https%3A%2F%2Fcdn.example.com%2Fa%2Bb.png%3Fx%3D1%26y%3D2%23frag")
+        let decoded = URLComponents(url: proxied, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "url" }?.value
+        XCTAssertEqual(decoded, image.absoluteString)
+    }
 }

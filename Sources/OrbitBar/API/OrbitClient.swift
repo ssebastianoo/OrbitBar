@@ -79,6 +79,15 @@ final class OrbitClient: @unchecked Sendable {
         return url
     }()
 
+    /// `proxy?url=<url>`, with every reserved character of `url` percent-encoded. `URLQueryItem` leaves `+`, `&`
+    /// and `=` alone in some positions, and the worker reads `+` as a space.
+    nonisolated static func proxied(_ url: URL, through proxy: URL) -> URL? {
+        guard var components = URLComponents(url: proxy, resolvingAgainstBaseURL: false),
+              let value = url.absoluteString.addingPercentEncoding(withAllowedCharacters: .urlUnreserved) else { return nil }
+        components.percentEncodedQuery = "url=" + value
+        return components.url
+    }
+
     nonisolated static let imageProxyKey: String? = {
         guard let key = Bundle.main.object(forInfoDictionaryKey: "OrbitBarImageProxyKey") as? String, !key.isEmpty else { return nil }
         return key
@@ -266,9 +275,7 @@ final class OrbitClient: @unchecked Sendable {
             request = URLRequest(url: url)
             if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         } else if !direct, let proxy = Self.imageProxy {
-            var components = URLComponents(url: proxy, resolvingAgainstBaseURL: false)!
-            components.queryItems = [URLQueryItem(name: "url", value: url.absoluteString)]
-            guard let proxied = components.url else { throw OrbitError.unexpected("Could not load \(url.lastPathComponent).") }
+            guard let proxied = Self.proxied(url, through: proxy) else { throw OrbitError.unexpected("Could not load \(url.lastPathComponent).") }
             request = URLRequest(url: proxied)
             if let key = Self.imageProxyKey { request.setValue(key, forHTTPHeaderField: "X-Proxy-Key") }
         } else if direct {
@@ -301,4 +308,9 @@ private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
         }
         completionHandler(next)
     }
+}
+
+extension CharacterSet {
+    /// RFC 3986 unreserved characters: the only ones safe unencoded inside a query value.
+    static let urlUnreserved = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
 }
