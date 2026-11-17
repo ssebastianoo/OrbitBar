@@ -71,7 +71,7 @@ During development, `swift run` launches it directly. Debug-only switches: `ORBI
 | r, ⌘R | Refresh |
 | ⌘, / ? | Account / shortcut help |
 
-In the editor: ⌘⏎ saves, esc cancels, and ⌘⌫ moves the task to the trash. Right-click the menu bar icon to quit.
+In the editor: ⌘⏎ saves, esc cancels, and ⌘⌫ moves the task to the trash. ⌘K opens the status picker. Right-click the menu bar icon to toggle Launch at Login or quit.
 
 ## How it talks to Orbit
 

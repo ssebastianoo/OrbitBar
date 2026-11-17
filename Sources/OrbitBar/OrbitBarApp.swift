@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import ServiceManagement
 import SwiftUI
 
 @main
@@ -105,10 +106,23 @@ final class PanelController: NSObject, NSPopoverDelegate {
             menu.addItem(withTitle: "Open Orbit in Browser", action: #selector(openOrbitFromMenu), keyEquivalent: "").target = self
         }
         menu.addItem(.separator())
+        let login = menu.addItem(withTitle: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+        login.target = self
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit OrbitBar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            if service.status == .enabled { try service.unregister() } else { try service.register() }
+        } catch {
+            NSLog("OrbitBar: could not change launch at login: \(error)")
+        }
     }
 
     @objc private func openFromMenu() { show() }

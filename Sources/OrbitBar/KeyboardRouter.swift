@@ -23,7 +23,7 @@ enum Shortcuts {
         .init(keys: "⏎  or  e", title: "Edit task"),
         .init(keys: "n  ⌘N", title: "New task"),
         .init(keys: "x  or  space", title: "Mark done / not done"),
-        .init(keys: "s", title: "Change status (then 1…9 or ↑↓ ⏎)"),
+        .init(keys: "s  ⌘K", title: "Change status (then 1…9 or ↑↓ ⏎)"),
         .init(keys: "p", title: "Next priority"),
         .init(keys: "a", title: "Assign / unassign me"),
         .init(keys: "o  ⌘O", title: "Open in browser"),
@@ -42,7 +42,7 @@ enum Shortcuts {
     static let editor: [Shortcut] = [
         .init(keys: "e", title: "Edit description"),
         .init(keys: "t", title: "Edit title"),
-        .init(keys: "s", title: "Change status"),
+        .init(keys: "s  ⌘K", title: "Change status"),
         .init(keys: "p  a", title: "Next priority / assign me"),
         .init(keys: "d", title: "Due date"),
         .init(keys: "o  c", title: "Open in browser / copy link"),
@@ -120,6 +120,7 @@ extension AppModel {
             if isNew { Task { await createDraft() } } else { closePage() }
             return true
         }
+        if command && key == "k" { openStatusPicker(for: .draft); return true }
         if command && key == "s" {
             if isNew { Task { await createDraft() } } else { Task { await commitDraft() } }
             return true
@@ -162,6 +163,7 @@ extension AppModel {
             case "n": newTask(); return true
             case "f": searchFocusRequest += 1; return true
             case "r": Task { await refresh() }; return true
+            case "k": if let id = selectedID { openStatusPicker(for: .task(id)) }; return true
             case "o": openInBrowser(selectedTask); return true
             case ",": screen = .account; return true
             case "[": cycleWorkspace(-1); return true
