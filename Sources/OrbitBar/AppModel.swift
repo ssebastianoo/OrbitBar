@@ -133,7 +133,15 @@ final class AppModel {
     private var isCommitting = false
     private var commitQueued = false
     private var lastRefresh: Date?
-    private var loadGeneration = 0
+    /// Bumped when a session starts or ends: answers for an older session are dropped.
+    private var sessionGeneration = 0
+    /// Bumped by each workspace load; a newer one (or a sign-out) makes older results stale.
+    private var workspaceGeneration = 0
+    /// Bumped by each task load, a workspace switch and a sign-out.
+    private var taskGeneration = 0
+    /// `perform` calls nest (sign-in → bootstrap → workspace): loading lasts until the outermost ends.
+    private var loadingCount = 0
+    private let conflictRetriesLimit = 2
     private let providerSignIn = ProviderSignIn()
 
     /// Set by the panel controller: closes the menu bar panel.
@@ -250,7 +258,10 @@ final class AppModel {
         } else if let token = answer.passwordToken {
             signInStep = .linkPassword(server: server, token: token, provider: answer.provider ?? "", email: answer.email ?? "")
         } else if let token = answer.sessionToken {
-            Keychain.save(token: token, server: server.absoluteString)
+            let saved = Keychain.save(token: token, server: server.absoluteString)
+            // Signing in to another server replaces the old session: don't leave its token behind.
+            if let previous = Prefs.server, previous != server.absoluteString { Keychain.delete(server: previous) }
+            if let old = client, old.server.absoluteString != server.absoluteString { Keychain.delete(server: old.server.absoluteString) }
             Prefs.server = server.absoluteString
             serverInput = server.absoluteString
             client = OrbitClient(server: server, token: token)
@@ -258,7 +269,11 @@ final class AppModel {
             signInStep = .credentials
             phase = .signedIn
             screen = .list
+            sessionGeneration += 1
             await bootstrap()
+            if !saved, errorMessage == nil {
+                errorMessage = "Signed in, but the keychain refused to store the session: you'll have to sign in again after OrbitBar quits."
+            }
         } else {
             throw OrbitError.unexpected("The server did not return a session token. Update the Orbit server.")
         }
@@ -271,6 +286,16 @@ final class AppModel {
 
     private func forgetSession() {
         if let client { Keychain.delete(server: client.server.absoluteString) }
+        // Results of calls still running for this session must not land after it is gone.
+        sessionGeneration += 1
+        workspaceGeneration += 1
+        taskGeneration += 1
+        writeChains.values.forEach { $0.cancel() }
+        writeChains = [:]
+        selectedID = nil
+        confirmTrash = nil
+        statusPicker = nil
+        lastRefresh = nil
         client = nil
         user = nil
         workspaces = []
@@ -290,10 +315,12 @@ final class AppModel {
 
     private func bootstrap() async {
         guard let client else { return }
+        let generation = sessionGeneration
         await perform {
             async let me = client.me()
             async let list = client.workspaces()
             let (user, workspaces) = try await (me, list)
+            guard generation == self.sessionGeneration else { return }
             self.user = user
             self.workspaces = workspaces
             let preferred = Prefs.workspaceID.flatMap { id in workspaces.first { $0.id == id } } ?? workspaces.first
@@ -309,8 +336,9 @@ final class AppModel {
         projects = []
         tasks = []
         selectedID = nil
-        loadGeneration += 1
-        let generation = loadGeneration
+        workspaceGeneration += 1
+        taskGeneration += 1  // a task load for the previous workspace must not land here
+        let generation = workspaceGeneration
         await perform {
             async let projectsCall = client.projects(id)
             async let membersCall = client.members(id)
@@ -323,23 +351,24 @@ final class AppModel {
                 for try await (projectID, list) in group { result[projectID] = list.sorted { $0.position < $1.position } }
                 return result
             }
-            guard generation == self.loadGeneration else { return }
+            guard generation == self.workspaceGeneration else { return }
             self.projects = projects
             self.members = members.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
             self.statusesByProject = statuses
             self.statusByID = Dictionary(uniqueKeysWithValues: statuses.values.flatMap { $0 }.map { ($0.id, $0) })
             if let filter = self.projectFilter, !projects.contains(where: { $0.id == filter }) { self.projectFilter = nil }
         }
+        guard generation == workspaceGeneration else { return }
         await reloadTasks()
     }
 
     func reloadTasks() async {
         guard let client, let workspaceID else { return }
-        loadGeneration += 1
-        let generation = loadGeneration
+        taskGeneration += 1
+        let generation = taskGeneration
         await perform(showsLoading: true) {
             let list = try await client.tasks(workspaceID, projectID: self.projectFilter, view: self.onlyMine ? "mine" : nil)
-            guard generation == self.loadGeneration else { return }
+            guard generation == self.taskGeneration, workspaceID == self.workspaceID else { return }
             // Keep local copies that are newer than this page (a write finished while it loaded).
             let local = Dictionary(self.tasks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             self.tasks = list.map { fetched in
@@ -365,9 +394,14 @@ final class AppModel {
 
     /// Runs a call, shows its error, and signs out when the session has ended.
     private func perform(showsLoading: Bool = true, _ work: @escaping () async throws -> Void) async {
-        if showsLoading { isLoading = true }
+        if showsLoading { loadingCount += 1; isLoading = true }
         errorMessage = nil
-        defer { if showsLoading { isLoading = false } }
+        defer {
+            if showsLoading {
+                loadingCount -= 1
+                isLoading = loadingCount > 0
+            }
+        }
         do {
             try await work()
         } catch OrbitError.unauthorized {
@@ -534,6 +568,7 @@ final class AppModel {
         if isCommitting { commitQueued = true; return true }
         isCommitting = true
         defer { isCommitting = false }
+        var conflicts = 0
         repeat {
             commitQueued = false
             guard let current = draft, let id = current.taskID, var body = current.body() else { break }
@@ -542,6 +577,7 @@ final class AppModel {
             saveState = .saving
             do {
                 let updated = try await client.updateTask(workspaceID, taskID: id, body: body)
+                guard self.client === client else { return false }
                 replace(updated)
                 if draft?.taskID == id { draft?.original = updated }
                 saveState = .saved
@@ -550,9 +586,13 @@ final class AppModel {
                 errorMessage = OrbitError.unauthorized.errorDescription
                 return false
             } catch {
+                guard self.client === client else { return false }
                 saveState = .failed
-                if case OrbitError.problem(409, _, _) = error, let latest = try? await client.task(workspaceID, taskID: id) {
-                    // Someone else changed the task: keep these edits on top of the latest version.
+                if case OrbitError.problem(409, _, _) = error, conflicts < conflictRetriesLimit,
+                   let latest = try? await client.task(workspaceID, taskID: id), self.client === client {
+                    // Someone else changed the task: keep these edits on top of the latest version. A conflict
+                    // that keeps coming back is shown instead of retried forever.
+                    conflicts += 1
                     replace(latest)
                     if draft?.taskID == id { draft?.original = latest; commitQueued = true; continue }
                 }
@@ -595,7 +635,9 @@ final class AppModel {
     private var writeChains: [String: Task<Void, Never>] = [:]
 
     /// An optimistic quick change from the list (status, priority, assignee): shown at once, sent in order.
-    private func quickUpdate(_ task: OrbitTask, local: @escaping (inout OrbitTask) -> Void, body: JSONBody) {
+    /// `local` must give the same result when applied twice. `body` builds the request from the task with
+    /// `local` applied, so a retry after a conflict sends the change on top of the other person's edit.
+    private func quickUpdate(_ task: OrbitTask, local: @escaping (inout OrbitTask) -> Void, body: @escaping (OrbitTask) -> JSONBody) {
         guard let client, let workspaceID else { return }
         if var current = tasks.first(where: { $0.id == task.id }) {
             local(&current)
@@ -611,18 +653,20 @@ final class AppModel {
 
     /// Sends one quick change with the newest known version. A conflict (someone else changed the
     /// task) loads the latest copy and sends the change once more on top of it.
-    private func send(taskID: String, body: JSONBody, client: OrbitClient, workspaceID: String, local: (inout OrbitTask) -> Void) async {
+    private func send(taskID: String, body: (OrbitTask) -> JSONBody, client: OrbitClient, workspaceID: String, local: (inout OrbitTask) -> Void) async {
         for attempt in 0..<2 {
-            guard let version = tasks.first(where: { $0.id == taskID })?.version else { return }
-            var request = body
-            request["expected_version"] = version
+            guard !Task.isCancelled, self.client === client, var current = tasks.first(where: { $0.id == taskID }) else { return }
+            local(&current)
+            var request = body(current)
+            request["expected_version"] = current.version
             do {
                 let updated = try await client.updateTask(workspaceID, taskID: taskID, body: request)
+                guard self.client === client else { return }
                 replace(updated)
                 if draft?.taskID == taskID, draft?.body() == nil { draft = TaskDraft(task: updated) }
                 return
             } catch OrbitError.problem(409, _, _) where attempt == 0 {
-                guard let latest = try? await client.task(workspaceID, taskID: taskID) else { break }
+                guard let latest = try? await client.task(workspaceID, taskID: taskID), self.client === client else { break }
                 var shown = latest
                 local(&shown)
                 replace(OrbitTask(copying: shown, version: latest.version), force: true)
@@ -631,12 +675,14 @@ final class AppModel {
                 errorMessage = OrbitError.unauthorized.errorDescription
                 return
             } catch {
+                guard self.client === client, !Task.isCancelled else { return }
                 errorMessage = error.localizedDescription
                 break
             }
         }
         // Show what the server really has.
-        if let latest = try? await client.task(workspaceID, taskID: taskID) { replace(latest, force: true) }
+        guard self.client === client else { return }
+        if let latest = try? await client.task(workspaceID, taskID: taskID), self.client === client { replace(latest, force: true) }
     }
 
     func toggleDone(_ task: OrbitTask?) {
@@ -651,7 +697,7 @@ final class AppModel {
 
     func setStatus(_ task: OrbitTask, _ status: TaskStatus) {
         guard status.id != task.statusId else { return }
-        quickUpdate(task, local: { $0.statusId = status.id }, body: ["status_id": status.id])
+        quickUpdate(task, local: { $0.statusId = status.id }, body: { _ in ["status_id": status.id] })
     }
 
     func cycleStatus(_ task: OrbitTask?) {
@@ -667,14 +713,18 @@ final class AppModel {
     }
 
     func setPriority(_ task: OrbitTask, _ priority: Priority) {
-        quickUpdate(task, local: { $0.priority = priority.rawValue }, body: ["priority": priority.rawValue])
+        quickUpdate(task, local: { $0.priority = priority.rawValue }, body: { _ in ["priority": priority.rawValue] })
     }
 
     func toggleAssignMe(_ task: OrbitTask?) {
         guard let task, let me = user?.id else { return }
-        var ids = task.assigneeIds
-        if let index = ids.firstIndex(of: me) { ids.remove(at: index) } else { ids.append(me) }
-        quickUpdate(task, local: { $0.assigneeIds = ids }, body: ["assignee_ids": ids])
+        // The intent (add or remove me) is fixed now; the list it applies to is the newest one at send time,
+        // so someone else's assignee change made meanwhile is kept.
+        let adding = !task.assigneeIds.contains(me)
+        quickUpdate(task, local: { task in
+            task.assigneeIds.removeAll { $0 == me }
+            if adding { task.assigneeIds.append(me) }
+        }, body: { ["assignee_ids": $0.assigneeIds] })
     }
 
     func requestTrash(_ task: OrbitTask?) {
@@ -682,14 +732,24 @@ final class AppModel {
     }
 
     func trashConfirmed() async {
-        guard let task = confirmTrash, let client, let workspaceID else { return }
+        guard let requested = confirmTrash, let client, let workspaceID else { return }
         confirmTrash = nil
+        // Quick changes still being sent would change the version: let them finish, then use the newest copy.
+        await writeChains[requested.id]?.value
+        guard self.client === client, let task = tasks.first(where: { $0.id == requested.id }) else { return }
         let visible = visibleTasks
         let next = visible.firstIndex(of: task).map { index in
             visible.indices.contains(index + 1) ? visible[index + 1].id : (index > 0 ? visible[index - 1].id : nil)
         } ?? nil
         await perform(showsLoading: false) {
-            try await client.trashTask(workspaceID, taskID: task.id, version: task.version)
+            do {
+                try await client.trashTask(workspaceID, taskID: task.id, version: task.version)
+            } catch OrbitError.problem(409, _, _) {
+                // Changed meanwhile (an editor save, someone else): trash the latest version.
+                let latest = try await client.task(workspaceID, taskID: task.id)
+                try await client.trashTask(workspaceID, taskID: task.id, version: latest.version)
+            }
+            guard self.client === client else { return }
             self.tasks.removeAll { $0.id == task.id }
             self.selectedID = next
             if self.draft?.taskID == task.id { self.finishClosing() }

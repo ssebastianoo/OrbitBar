@@ -87,7 +87,8 @@ extension Theme {
 }
 
 /// Loads description images. Orbit's own files (`/api/…` attachment URLs) need the session, so
-/// requests to the signed-in server carry the bearer token; other hosts never see it.
+/// requests to the signed-in server carry the bearer token; other hosts never see it. Images on other
+/// sites go through the image proxy, or wait for a click when there is none.
 struct AuthorizedImageProvider: ImageProvider {
     var client: OrbitClient?
 
@@ -106,6 +107,7 @@ struct AuthorizedImage: View {
     var client: OrbitClient?
     @State private var image: NSImage?
     @State private var failed = false
+    @State private var blocked = false
 
     var body: some View {
         Group {
@@ -115,14 +117,21 @@ struct AuthorizedImage: View {
                     .scaledToFit()
                     .frame(maxWidth: image.size.width, maxHeight: 360, alignment: .leading)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .onTapGesture(count: 2) { if let url { NSWorkspace.shared.open(url) } }
+                    .onTapGesture(count: 2) { if let url, OrbitClient.isWeb(url) { NSWorkspace.shared.open(url) } }
                     .help("Double-click to open")
             } else {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.primary.opacity(0.05))
-                    .frame(height: failed ? 36 : 120)
+                    .frame(height: failed || blocked ? 36 : 120)
                     .overlay {
-                        if failed {
+                        if blocked {
+                            HStack(spacing: 6) {
+                                Label(url?.host ?? "External image", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
+                                Button("Load Image") { Task { await load(direct: true) } }
+                                    .controlSize(.small)
+                                    .help("Loads the image straight from \(url?.host ?? "its site"), which then sees your address")
+                            }
+                        } else if failed {
                             Label("Image unavailable", systemImage: "photo").font(.caption).foregroundStyle(.secondary)
                         } else {
                             ProgressView().controlSize(.small)
@@ -135,15 +144,17 @@ struct AuthorizedImage: View {
         .task(id: url) { await load() }
     }
 
-    private func load() async {
-        guard let url else { failed = true; return }
+    private func load(direct: Bool = false) async {
+        blocked = false
+        guard let url, OrbitClient.isWeb(url), let client else { failed = true; return }
         if let cached = ImageCache.images.object(forKey: url as NSURL) { image = cached; return }
         do {
-            let data: Data
-            if let client { data = try await client.fileData(url) } else { data = try await URLSession.shared.data(from: url).0 }
+            let data = try await client.fileData(url, direct: direct)
             guard let loaded = NSImage(data: data) else { failed = true; return }
             ImageCache.images.setObject(loaded, forKey: url as NSURL)
             image = loaded
+        } catch OrbitError.externalImageBlocked {
+            blocked = true
         } catch {
             failed = true
         }

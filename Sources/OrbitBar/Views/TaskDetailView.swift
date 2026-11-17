@@ -403,6 +403,8 @@ private struct DescriptionSection: View {
             }
             .onHover { hovering = $0 }
             .environment(\.openURL, OpenURLAction { url in
+                // Anyone in the workspace writes descriptions: open web and mail links only, never `file:` or app schemes.
+                guard OrbitClient.isOpenableLink(url) else { return .discarded }
                 NSWorkspace.shared.open(url)
                 model.closePanel()
                 return .handled

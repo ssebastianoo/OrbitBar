@@ -20,9 +20,9 @@ final class ProviderSignIn: NSObject, ASWebAuthenticationPresentationContextProv
     }
 
     nonisolated static func verifier() -> String {
-        var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        return base64url(Data(bytes))
+        // CryptoKit draws from the system generator and can't fail, unlike `SecRandomCopyBytes`, whose error
+        // would leave the buffer zeroed.
+        base64url(SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) })
     }
 
     nonisolated static func challenge(for verifier: String) -> String {

@@ -95,4 +95,29 @@ final class OrbitBarTests: XCTestCase {
         XCTAssertEqual(Priority.none.next, .low)
         XCTAssertEqual(Priority.urgent.next, .none)
     }
+
+    func testLinkAndImagePolicy() {
+        let server = URL(string: "https://orbit.example.com")!
+        XCTAssertTrue(OrbitClient.isOpenableLink(URL(string: "https://example.com/a")!))
+        XCTAssertTrue(OrbitClient.isOpenableLink(URL(string: "mailto:a@example.com")!))
+        XCTAssertFalse(OrbitClient.isOpenableLink(URL(string: "file:///Applications/Calculator.app")!))
+        XCTAssertFalse(OrbitClient.isOpenableLink(URL(string: "smb://host/share")!))
+        XCTAssertFalse(OrbitClient.isOpenableLink(URL(string: "x-apple.systempreferences:com.apple.preference")!))
+        XCTAssertNil(OrbitClient.resolve("file:///etc/hosts", server: server))
+        XCTAssertNil(OrbitClient.resolve("javascript:alert(1)", server: server))
+
+        XCTAssertTrue(OrbitClient.sameOrigin(server, URL(string: "https://ORBIT.example.com:443/api/x")!))
+        XCTAssertFalse(OrbitClient.sameOrigin(server, URL(string: "http://orbit.example.com/api/x")!))
+        XCTAssertFalse(OrbitClient.sameOrigin(server, URL(string: "https://orbit.example.com:8443/x")!))
+        XCTAssertFalse(OrbitClient.sameOrigin(server, URL(string: "https://evil.example.com/x")!))
+    }
+
+    func testInsecureServerWarning() {
+        XCTAssertTrue(OrbitClient.isInsecure(URL(string: "http://orbit.example.com")!))
+        XCTAssertTrue(OrbitClient.isInsecure(URL(string: "http://8.8.8.8")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "https://orbit.example.com")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://localhost:18080")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://192.168.1.20")!))
+        XCTAssertFalse(OrbitClient.isInsecure(URL(string: "http://nas.local")!))
+    }
 }

@@ -6,6 +6,9 @@
 #   Export: Keychain Access → My Certificates → "Apple Development: …" → Export → .p12 with a password, then
 #     base64 -i cert.p12 | pbcopy        → secret MACOS_CERT_P12
 #     the export password                → secret MACOS_CERT_PASSWORD
+#
+# Image proxy: the secret ORBITBAR_IMAGE_PROXY (the worker's URL, see worker/image-proxy) is built into the app's
+# Info.plist. ORBITBAR_IMAGE_PROXY_KEY is optional and must equal the worker's PROXY_KEY.
 name: Release
 
 on:
@@ -57,6 +60,9 @@ jobs:
           echo "ORBITBAR_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
 
       - name: Build dmg
+        env:
+          ORBITBAR_IMAGE_PROXY: ${{ secrets.ORBITBAR_IMAGE_PROXY }}
+          ORBITBAR_IMAGE_PROXY_KEY: ${{ secrets.ORBITBAR_IMAGE_PROXY_KEY }}
         run: scripts/release.sh
 
       - name: Publish release

@@ -5,6 +5,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Local settings (not committed): .env may set ORBITBAR_IMAGE_PROXY, ORBITBAR_IMAGE_PROXY_KEY, ORBITBAR_SIGN_IDENTITY.
+# Variables already in the environment win, so CI is unaffected.
+if [ -f .env ]; then
+  while IFS='=' read -r name value; do
+    case "$name" in ''|\#*) continue ;; esac
+    if [ -z "${!name:-}" ]; then export "$name=$value"; fi
+  done < .env
+fi
+
 swift build -c release --arch arm64 --arch x86_64 2>/dev/null || swift build -c release
 BIN="$(swift build -c release --show-bin-path 2>/dev/null)/OrbitBar"
 [ -x "$BIN" ] || BIN="$(find .build -path '*release*' -type f -name OrbitBar -perm -111 | head -1)"
@@ -14,6 +23,19 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/OrbitBar"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# The image proxy (worker/image-proxy) is configured from the environment, so its URL is not committed:
+#   ORBITBAR_IMAGE_PROXY      the worker's URL (from .env locally, a GitHub secret of the same name in the release workflow)
+#   ORBITBAR_IMAGE_PROXY_KEY  optional, the worker's PROXY_KEY
+# Without a URL, images from other sites show a "Load Image" button instead of loading on their own.
+if [ -n "${ORBITBAR_IMAGE_PROXY:-}" ]; then
+  /usr/libexec/PlistBuddy -c "Add :OrbitBarImageProxy string $ORBITBAR_IMAGE_PROXY" "$APP/Contents/Info.plist"
+  if [ -n "${ORBITBAR_IMAGE_PROXY_KEY:-}" ]; then
+    /usr/libexec/PlistBuddy -c "Add :OrbitBarImageProxyKey string $ORBITBAR_IMAGE_PROXY_KEY" "$APP/Contents/Info.plist"
+  fi
+  echo "Image proxy: $ORBITBAR_IMAGE_PROXY"
+else
+  echo "Image proxy: none (set ORBITBAR_IMAGE_PROXY to use one)"
+fi
 # A stable signing identity keeps the keychain item trusted across rebuilds. An ad-hoc signature changes with every
 # build, so macOS asks for keychain access again each time. ORBITBAR_SIGN_IDENTITY (a name or hash from
 # `security find-identity -v -p codesigning`) picks the identity; without it the first "Apple Development" identity
