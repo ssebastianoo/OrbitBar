@@ -169,8 +169,8 @@ final class AppModel {
 
     /// The statuses the filter offers: those of the filtered project, or of every project.
     var statusOptions: [StatusOption] {
-        let statuses = projectFilter.map { statuses(of: $0) } ?? statusesByProject.values.flatMap { $0 }
-        return StatusOption.merge(statuses)
+        let list = projectFilter.map { self.statuses(of: $0) } ?? statusesByProject.values.flatMap { $0 }
+        return StatusOption.merge(list)
     }
 
     func isStatusShown(_ option: StatusOption) -> Bool {
