@@ -222,3 +222,92 @@ enum OrbitDate {
         calendar.date(bySettingHour: 23, minute: 59, second: 0, of: date) ?? date
     }
 }
+
+/// The order of the tasks inside each section of the list.
+enum TaskSort: String, CaseIterable, Identifiable, Sendable {
+    case newest, updated, priority, due, oldest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .newest: return "Newest First"
+        case .updated: return "Recently Updated"
+        case .priority: return "Priority"
+        case .due: return "Due Date"
+        case .oldest: return "Oldest First"
+        }
+    }
+
+    /// `true` when `a` comes before `b`. Ties fall back to the newest task first.
+    nonisolated func inOrder(_ a: OrbitTask, _ b: OrbitTask) -> Bool {
+        func date(_ s: String?) -> Date { OrbitDate.parse(s) ?? .distantPast }
+        func newer() -> Bool {
+            let ca = date(a.createdAt), cb = date(b.createdAt)
+            return ca != cb ? ca > cb : a.number > b.number
+        }
+        switch self {
+        case .newest:
+            return newer()
+        case .oldest:
+            let ca = date(a.createdAt), cb = date(b.createdAt)
+            return ca != cb ? ca < cb : a.number < b.number
+        case .updated:
+            let ua = date(a.updatedAt), ub = date(b.updatedAt)
+            return ua != ub ? ua > ub : newer()
+        case .priority:
+            let pa = (Priority(rawValue: a.priority) ?? .none).rank, pb = (Priority(rawValue: b.priority) ?? .none).rank
+            if pa != pb { return pa < pb }
+            let da = OrbitDate.parse(a.dueAt) ?? .distantFuture, db = OrbitDate.parse(b.dueAt) ?? .distantFuture
+            return da != db ? da < db : newer()
+        case .due:
+            let da = OrbitDate.parse(a.dueAt) ?? .distantFuture, db = OrbitDate.parse(b.dueAt) ?? .distantFuture
+            return da != db ? da < db : newer()
+        }
+    }
+}
+
+/// A status in the list's status filter. Statuses belong to projects, so the filter merges the ones with the
+/// same name ("Todo" of every project is one entry).
+struct StatusOption: Identifiable, Equatable, Sendable {
+    /// The lowercased name.
+    var id: String
+    var name: String
+    var category: String
+    var position: Int
+    /// One of the merged statuses, for its icon and color.
+    var sample: TaskStatus
+
+    nonisolated static func key(_ status: TaskStatus) -> String {
+        status.name.trimmingCharacters(in: .whitespaces).lowercased()
+    }
+
+    /// The statuses shown before the person picks: everything but backlog and finished ones.
+    nonisolated static func visibleByDefault(_ status: TaskStatus) -> Bool {
+        !status.isDone && key(status) != "backlog"
+    }
+
+    /// Whether tasks with this status are shown, given the person's saved choices (lowercased name → shown).
+    nonisolated static func isVisible(_ status: TaskStatus, choices: [String: Bool]) -> Bool {
+        choices[key(status)] ?? visibleByDefault(status)
+    }
+
+    /// One entry per status name, in the list's section order.
+    nonisolated static func merge(_ statuses: [TaskStatus]) -> [StatusOption] {
+        var byKey: [String: StatusOption] = [:]
+        for status in statuses {
+            let key = key(status)
+            if let existing = byKey[key], StatusCategory.rank(existing.category) < StatusCategory.rank(status.category)
+                || (existing.category == status.category && existing.position <= status.position) { continue }
+            byKey[key] = StatusOption(id: key, name: status.name, category: status.category, position: status.position, sample: status)
+        }
+        return byKey.values.sorted(by: inOrder)
+    }
+
+    nonisolated static func inOrder(_ a: StatusOption, _ b: StatusOption) -> Bool {
+        let ra = StatusCategory.rank(a.category), rb = StatusCategory.rank(b.category)
+        if ra != rb { return ra < rb }
+        if a.position != b.position { return a.position < b.position }
+        return a.id < b.id
+    }
+}

@@ -65,7 +65,7 @@ During development, `swift run` launches it directly. Debug-only switches: `ORBI
 | o, ⌘O / c | Open in browser / copy link |
 | ⌫ | Move to trash (⏎ confirms) |
 | / , ⌘F | Search (↑ ↓ ⏎ work while typing; esc clears) |
-| m / h | My ↔ all tasks / show or hide done |
+| m / h | My ↔ all tasks / show or hide finished statuses (done, cancelled, duplicate) |
 | [ ] | Previous / next project |
 | ⌘[ ⌘], ⌘1…9 | Switch workspace |
 | r, ⌘R | Refresh |

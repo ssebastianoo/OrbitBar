@@ -64,9 +64,15 @@ enum Prefs {
         set { d.set(newValue, forKey: "onlyMine") }
     }
 
-    static var showDone: Bool {
-        get { d.bool(forKey: "showDone") }
-        set { d.set(newValue, forKey: "showDone") }
+    /// The status filter's choices: lowercased status name → shown. Names not in it use the default.
+    static var statusChoices: [String: Bool] {
+        get { d.dictionary(forKey: "statusChoices") as? [String: Bool] ?? [:] }
+        set { d.set(newValue, forKey: "statusChoices") }
+    }
+
+    static var taskSort: TaskSort {
+        get { d.string(forKey: "taskSort").flatMap(TaskSort.init(rawValue:)) ?? .newest }
+        set { d.set(newValue.rawValue, forKey: "taskSort") }
     }
 
     static var lastProjectForNew: String? {

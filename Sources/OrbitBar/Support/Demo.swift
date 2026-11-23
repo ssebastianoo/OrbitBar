@@ -26,9 +26,10 @@ extension AppModel {
         workspaceID = "w1"
         projects = [Project(id: "p1", name: "Website", key: "WEB", color: "#8b5cf6"), Project(id: "p2", name: "Mobile", key: "MOB", color: "#10b981")]
         let statuses = ["p1", "p2"].flatMap { p in [
-            TaskStatus(id: "\(p)-todo", projectId: p, name: "Todo", color: "#9ca3af", category: "unstarted", position: 0),
-            TaskStatus(id: "\(p)-doing", projectId: p, name: "In Progress", color: "#f59e0b", category: "started", position: 1),
-            TaskStatus(id: "\(p)-done", projectId: p, name: "Done", color: "#8b5cf6", category: "completed", position: 2),
+            TaskStatus(id: "\(p)-backlog", projectId: p, name: "Backlog", color: "#9ca3af", category: "unstarted", position: 0),
+            TaskStatus(id: "\(p)-todo", projectId: p, name: "Todo", color: "#9ca3af", category: "unstarted", position: 1),
+            TaskStatus(id: "\(p)-doing", projectId: p, name: "In Progress", color: "#f59e0b", category: "started", position: 2),
+            TaskStatus(id: "\(p)-done", projectId: p, name: "Done", color: "#8b5cf6", category: "completed", position: 3),
         ] }
         statusesByProject = Dictionary(grouping: statuses, by: \.projectId)
         statusByID = Dictionary(uniqueKeysWithValues: statuses.map { ($0.id, $0) })
@@ -44,6 +45,7 @@ extension AppModel {
             task(21, "p2", "todo", "Offline mode for task list", "low"),
             task(3, "p1", "todo", "Audit accessibility of sign-in", "none", due: 9),
             task(7, "p1", "done", "Set up preview deployments", "medium"),
+            task(25, "p2", "backlog", "Widgets for the home screen", "low"),
         ]
         selectedID = "t14"
         phase = .signedIn

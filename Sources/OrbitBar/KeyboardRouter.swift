@@ -31,7 +31,7 @@ enum Shortcuts {
         .init(keys: "⌫", title: "Move to trash"),
         .init(keys: "/  ⌘F", title: "Search"),
         .init(keys: "m", title: "My tasks / all tasks"),
-        .init(keys: "h", title: "Show / hide done"),
+        .init(keys: "h", title: "Show / hide finished statuses"),
         .init(keys: "[  ]", title: "Previous / next project"),
         .init(keys: "⌘[  ⌘]  ⌘1…9", title: "Switch workspace"),
         .init(keys: "r  ⌘R", title: "Refresh"),
@@ -218,7 +218,7 @@ extension AppModel {
         case "c": copyLink(selectedTask)
         case "/": searchFocusRequest += 1
         case "m": setOnlyMine(!onlyMine)
-        case "h": setShowDone(!showDone)
+        case "h": toggleFinishedStatuses()
         case "[": cycleProjectFilter(-1)
         case "]": cycleProjectFilter(1)
         case "r": Task { await refresh() }

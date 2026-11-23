@@ -130,4 +130,42 @@ final class OrbitBarTests: XCTestCase {
         let decoded = URLComponents(url: proxied, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "url" }?.value
         XCTAssertEqual(decoded, image.absoluteString)
     }
+
+    private func status(_ id: String, _ name: String, _ category: String, _ position: Int, project: String = "p1") -> TaskStatus {
+        TaskStatus(id: id, projectId: project, name: name, color: "#000000", category: category, position: position)
+    }
+
+    func testStatusFilterDefaultsAndChoices() {
+        let backlog = status("b", "Backlog", "unstarted", 0), todo = status("t", "Todo", "unstarted", 1)
+        let doing = status("s", "In Progress", "started", 2), done = status("d", "Done", "completed", 3)
+        let cancelled = status("c", "Cancelled", "cancelled", 4)
+        XCTAssertEqual([backlog, todo, doing, done, cancelled].map { StatusOption.isVisible($0, choices: [:]) },
+                       [false, true, true, false, false])
+        XCTAssertTrue(StatusOption.isVisible(done, choices: ["done": true]))
+        XCTAssertFalse(StatusOption.isVisible(todo, choices: ["todo": false]))
+    }
+
+    func testStatusOptionsMergeByNameInSectionOrder() {
+        let options = StatusOption.merge([
+            status("d1", "Done", "completed", 3),
+            status("t1", "Todo", "unstarted", 1),
+            status("t2", "todo", "unstarted", 0, project: "p2"),
+            status("s1", "In Progress", "started", 2),
+            status("b1", "Backlog", "unstarted", 0),
+        ])
+        XCTAssertEqual(options.map(\.id), ["in progress", "backlog", "todo", "done"])
+    }
+
+    func testTaskSortOrders() throws {
+        var a = try decodeTask(), b = a, c = a
+        a.id = "a"; a.createdAt = "2026-11-01T10:00:00Z"; a.updatedAt = "2026-11-05T10:00:00Z"; a.priority = "low"; a.dueAt = nil
+        b.id = "b"; b.createdAt = "2026-11-03T10:00:00.500Z"; b.updatedAt = "2026-11-03T10:00:00Z"; b.priority = "urgent"; b.dueAt = "2026-12-01T10:00:00Z"
+        c.id = "c"; c.createdAt = "2026-11-02T10:00:00Z"; c.updatedAt = "2026-11-04T10:00:00Z"; c.priority = "urgent"; c.dueAt = "2026-11-25T10:00:00Z"
+        func order(_ sort: TaskSort) -> [String] { [a, b, c].sorted(by: sort.inOrder).map(\.id) }
+        XCTAssertEqual(order(.newest), ["b", "c", "a"])
+        XCTAssertEqual(order(.oldest), ["a", "c", "b"])
+        XCTAssertEqual(order(.updated), ["a", "c", "b"])
+        XCTAssertEqual(order(.priority), ["c", "b", "a"])
+        XCTAssertEqual(order(.due), ["c", "b", "a"])
+    }
 }

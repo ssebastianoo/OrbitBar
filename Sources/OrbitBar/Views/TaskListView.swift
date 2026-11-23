@@ -111,9 +111,8 @@ private struct FilterBar: View {
 
                 Spacer()
 
-                Toggle("Done", isOn: Binding(get: { model.showDone }, set: { model.setShowDone($0) }))
-                    .toggleStyle(.checkbox)
-                    .help("Show done tasks (h)")
+                StatusFilterMenu()
+                SortMenu()
             }
 
             HStack(spacing: 6) {
@@ -138,6 +137,68 @@ private struct FilterBar: View {
     }
 }
 
+private struct StatusFilterMenu: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let options = model.statusOptions
+        let shown = options.filter { model.isStatusShown($0) }
+        Menu {
+            ForEach(options) { option in
+                Toggle(isOn: Binding(get: { model.isStatusShown(option) }, set: { model.setStatus(option, shown: $0) })) {
+                    Label(option.name, systemImage: StatusCategory.symbol(option.category))
+                }
+            }
+            Divider()
+            Button("Show All") { options.forEach { model.setStatus($0, shown: true) } }
+            Button("Reset to Default") { model.resetStatusFilter() }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                Text(shown.count == options.count ? "All" : "\(shown.count)/\(options.count)")
+                    .monospacedDigit()
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Statuses: \(shown.map(\.name).joined(separator: ", ")) (h shows or hides finished ones)")
+    }
+}
+
+private struct SortMenu: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let sort = model.sort
+        Menu {
+            Picker("Sort", selection: Binding(get: { sort }, set: { model.setSort($0) })) {
+                ForEach(TaskSort.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Sort: \(sort.title)")
+    }
+}
+
+/// The popover's material, for views that sit on top of scrolling content.
+private struct PanelMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .popover
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
+}
+
 // MARK: - List
 
 private struct TaskList: View {
@@ -155,16 +216,17 @@ private struct TaskList: View {
                                     .id(task.id)
                             }
                         } header: {
-                            HStack {
-                                Text(StatusCategory.title(section.category))
+                            HStack(spacing: 6) {
+                                Text(section.title)
                                 Text("\(section.tasks.count)").foregroundStyle(.tertiary)
                                 Spacer()
                             }
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
-                            .background(.bar)
+                            .padding(.vertical, 5)
+                            // The popover's own material, so pinned headers blend with the panel in both themes.
+                            .background(PanelMaterial())
                         }
                     }
                 }

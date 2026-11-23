@@ -74,8 +74,9 @@ struct TaskDraft: Equatable {
 }
 
 struct TaskSection: Identifiable {
-    var id: String { category }
-    var category: String
+    /// The lowercased status name: a section holds one status of every project.
+    var id: String
+    var title: String
     var tasks: [OrbitTask]
 }
 
@@ -110,7 +111,8 @@ final class AppModel {
     // MARK: Filters
     var projectFilter: String?
     var onlyMine = Prefs.onlyMine
-    var showDone = Prefs.showDone
+    var statusChoices = Prefs.statusChoices
+    var sort = Prefs.taskSort
     var search = ""
 
     // MARK: UI
@@ -165,33 +167,45 @@ final class AppModel {
 
     // MARK: - Visible list
 
+    /// The statuses the filter offers: those of the filtered project, or of every project.
+    var statusOptions: [StatusOption] {
+        let statuses = projectFilter.map { statuses(of: $0) } ?? statusesByProject.values.flatMap { $0 }
+        return StatusOption.merge(statuses)
+    }
+
+    func isStatusShown(_ option: StatusOption) -> Bool {
+        StatusOption.isVisible(option.sample, choices: statusChoices)
+    }
+
     var sections: [TaskSection] {
         let query = search.trimmingCharacters(in: .whitespaces).lowercased()
         let visible = tasks.filter { task in
             if let projectFilter, task.projectId != projectFilter { return false }
             if onlyMine, let me = user?.id, !task.assigneeIds.contains(me) { return false }
-            if !showDone, isDone(task) { return false }
+            if let status = statusByID[task.statusId], !StatusOption.isVisible(status, choices: statusChoices) { return false }
             if !query.isEmpty {
                 let haystack = "\(identifier(task)) \(task.title)".lowercased()
                 if !query.split(separator: " ").allSatisfy({ haystack.contains($0) }) { return false }
             }
             return true
         }
-        let grouped = Dictionary(grouping: visible) { statusByID[$0.statusId]?.category ?? "unstarted" }
+        let grouped = Dictionary(grouping: visible) { task in
+            statusByID[task.statusId].map(StatusOption.key) ?? ""
+        }
+        let options = Dictionary(uniqueKeysWithValues: StatusOption.merge(Array(statusByID.values)).map { ($0.id, $0) })
+        let sort = sort
         return grouped
-            .sorted { StatusCategory.rank($0.key) < StatusCategory.rank($1.key) }
-            .map { TaskSection(category: $0.key, tasks: $0.value.sorted(by: order)) }
+            .sorted { a, b in
+                switch (options[a.key], options[b.key]) {
+                case let (x?, y?): return StatusOption.inOrder(x, y)
+                case (nil, _): return false
+                case (_, nil): return true
+                }
+            }
+            .map { TaskSection(id: $0.key, title: options[$0.key]?.name ?? "No Status", tasks: $0.value.sorted(by: sort.inOrder)) }
     }
 
     var visibleTasks: [OrbitTask] { sections.flatMap(\.tasks) }
-
-    private func order(_ a: OrbitTask, _ b: OrbitTask) -> Bool {
-        let pa = (Priority(rawValue: a.priority) ?? .none).rank, pb = (Priority(rawValue: b.priority) ?? .none).rank
-        if pa != pb { return pa < pb }
-        let da = OrbitDate.parse(a.dueAt) ?? .distantFuture, db = OrbitDate.parse(b.dueAt) ?? .distantFuture
-        if da != db { return da < db }
-        return a.updatedAt > b.updatedAt
-    }
 
     // MARK: - Launch & sign-in
 
@@ -441,10 +455,31 @@ final class AppModel {
         Task { await reloadTasks() }
     }
 
-    func setShowDone(_ value: Bool) {
-        showDone = value
-        Prefs.showDone = value
+    func setStatus(_ option: StatusOption, shown: Bool) {
+        statusChoices[option.id] = shown
+        Prefs.statusChoices = statusChoices
         keepSelectionValid()
+    }
+
+    /// Back to the default statuses (todo and in progress).
+    func resetStatusFilter() {
+        statusChoices = [:]
+        Prefs.statusChoices = [:]
+        keepSelectionValid()
+    }
+
+    /// `h`: shows the finished statuses if any is hidden, otherwise hides them all.
+    func toggleFinishedStatuses() {
+        let finished = statusOptions.filter { StatusCategory.done.contains($0.category) }
+        let show = finished.contains { !isStatusShown($0) }
+        for option in finished { statusChoices[option.id] = show }
+        Prefs.statusChoices = statusChoices
+        keepSelectionValid()
+    }
+
+    func setSort(_ value: TaskSort) {
+        sort = value
+        Prefs.taskSort = value
     }
 
     // MARK: - Selection
